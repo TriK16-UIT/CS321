@@ -22,10 +22,11 @@ from sklearn.metrics import accuracy_score
 class NERTrainer:
     def __init__(self, 
                  model_name: str = "vinai/phobert-base", 
-                 dataset: Union[str, Dataset] = "leduckhai/VietMed-NER",
+                 train_path: str = "Data/train.parquet",
+                 test_path: str = "Data/test.parquet",
+                 validation_path: str = "Data/validation.parquet",
                  output_dir: Optional[str] = None,
-                 resume_from_checkpoint: Optional[str] = None,
-                 train_fraction: float = 1.0):
+                 resume_from_checkpoint: Optional[str] = None):
         """
         Initialize NER Trainer with flexible configuration.
         
@@ -37,22 +38,14 @@ class NERTrainer:
             resume_from_checkpoint (str, optional): Path to checkpoint to resume training
         """
         # Load dataset
-        if isinstance(dataset, str):
-            self.dataset = load_dataset(dataset)
-        else:
-            self.dataset = dataset
-
-        if train_fraction < 1.0:
-            self.dataset['train'] = self._sample_dataset(
-                self.dataset['train'], 
-                train_fraction
-            )
-            logger.info(f"Using {train_fraction*100}% of training data: {len(self.dataset['train'])} samples")   
+        self.train_set = Dataset.from_parquet(train_path)  
+        self.test_set = Dataset.from_parquet(test_path)
+        self.validation_set = Dataset.from_parquet(validation_path)
         
         # Prepare label mappings
-        self.id2label = self.dataset["train"].features["tags"].feature._int2str
+        self.id2label = self.train_set.features["tags"].feature._int2str
         self.id2label = {int(k): v for k, v in enumerate(self.id2label)}
-        self.label2id = self.dataset["train"].features["tags"].feature._str2int
+        self.label2id = self.train_set.features["tags"].feature._str2int
         
         # Set output directory
         self.output_dir = output_dir or f"outputs/{model_name}"
@@ -71,27 +64,25 @@ class NERTrainer:
         # Compute metrics function
         self.compute_metrics = self._build_compute_metrics()
         
-        # Tokenize dataset
-        self.tokenized_dataset = self.dataset.map(
+        # Tokenize train dataset
+        self.tokenized_train = self.train_set.map(
             self._tokenize_and_align_labels, 
             batched=True, 
             fn_kwargs={"tokenizer": self.tokenizer}
         )
 
-    def _sample_dataset(self, dataset: Dataset, fraction: float) -> Dataset:
-        """
-        Sample a fraction of the dataset.
-        
-        Args:
-            dataset (Dataset): Input dataset
-            fraction (float): Fraction of data to keep
-        
-        Returns:
-            Dataset: Sampled dataset
-        """
-        # Use shuffle and select to get a random subset
-        return dataset.shuffle(seed=42).select(
-            range(int(len(dataset) * fraction))
+        # Tokenize test dataset
+        self.tokenized_test = self.test_set.map(
+            self._tokenize_and_align_labels, 
+            batched=True, 
+            fn_kwargs={"tokenizer": self.tokenizer}
+        )
+
+        # Tokenize validation dataset
+        self.tokenized_validation = self.validation_set.map(
+            self._tokenize_and_align_labels, 
+            batched=True, 
+            fn_kwargs={"tokenizer": self.tokenizer}
         )
 
     def _prepare_model(self, 
@@ -244,8 +235,8 @@ class NERTrainer:
         trainer = Trainer(
             model=self.model,
             args=training_args,
-            train_dataset=self.tokenized_dataset["train"],
-            eval_dataset=self.tokenized_dataset["validation"],
+            train_dataset=self.tokenized_train,
+            eval_dataset=self.tokenized_validation,
             data_collator=self.data_collator,
             tokenizer=self.tokenizer,
             compute_metrics=self.compute_metrics,
@@ -257,7 +248,11 @@ class NERTrainer:
 
         # Evaluate on test set
         logger.info("Start evaluation")
-        result = trainer.predict(self.tokenized_dataset["test"])
+        result = trainer.predict(self.tokenized_test)
+
+        logger.info("Saving the best model")
+        best_model_path = os.path.join(self.output_dir, "best_model")
+        trainer.save_model(best_model_path)
 
         # Save results
         logger.info("Finish training, saving the results")
@@ -269,14 +264,15 @@ class NERTrainer:
 
 def main(
     model_name: str = "vinai/phobert-base",
-    dataset: str = "leduckhai/VietMed-NER",
+    train_path: str = "Data/train.parquet",
+    test_path: str = "Data/test.parquet",
+    validation_path: str = "Data/validation.parquet",
     output_dir: Optional[str] = None,
     resume_from_checkpoint: Optional[str] = None,
     learning_rate: float = 2e-5,
     batch_size: int = 8,
     num_epochs: int = 5,
     gradient_accumulation_steps: int = 2,
-    train_fraction: float = 1.0
 ):
     """
     Main function to train NER model with flexible configuration.
@@ -293,10 +289,11 @@ def main(
     """
     trainer = NERTrainer(
         model_name=model_name, 
-        dataset=dataset, 
+        train_path=train_path,
+        test_path=test_path,
+        validation_path=validation_path,
         output_dir=output_dir, 
-        resume_from_checkpoint=resume_from_checkpoint,
-        train_fraction=train_fraction
+        resume_from_checkpoint=resume_from_checkpoint
     )
     
     trainer.train(
