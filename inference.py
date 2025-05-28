@@ -108,7 +108,7 @@ class NERInferencer:
     
 def main(
     model_path: str = "outputs/vinai/phobert-base/best_model", 
-    dataset_path: str = "Checkpoints/train-checkpoint-1.parquet",
+    dataset_path: str = "Checkpoints/train-checkpoint-10.parquet",
     output_dir: Optional[str] = None
 ):
     inferencer = NERInferencer(

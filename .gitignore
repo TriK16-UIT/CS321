@@ -2,3 +2,5 @@
 outputs
 transformers
 __pycache__
+results
+annotation_result
